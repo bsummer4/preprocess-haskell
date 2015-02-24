@@ -1,0 +1,20 @@
+name:                preprocess-haskell
+version:             0.1.0.0
+synopsis:            Preprocess Haskell Repositories.
+license:             MIT
+license-file:        LICENSE
+author:              Benjamin Summers
+maintainer:          ben@benjaminsummers.net
+category:            Language
+build-type:          Simple
+description:         Do all of the dirty work required to get a Haskell repo
+                     ready for straightforward static-analysis.
+cabal-version:       >=1.10
+
+library
+  exposed-modules:     Language.Haskell.Preprocess
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+  build-depends:       base >=4.7 && <4.8, foldl, system-filepath, turtle,
+                       basic-prelude, cpphs, containers, base-unicode-symbols,
+                       text
