@@ -76,25 +76,25 @@ shellLines = flip fold consFold
 literateHaskellFilename ∷ P.FilePath → Bool
 literateHaskellFilename fp = Just "lhs" ≡ P.extension fp
 
-processFile ∷ SrcTreePath → IO Module
-processFile fn = do
+processFile ∷ [(String,String)] → SrcTreePath → IO Module
+processFile macros fn = do
   let pstr = P.encodeString (unSTP fn)
   contents ← Prelude.readFile pstr
   return $ Module fn contents
-  noMacros ← CPP.runCpphs CPP.defaultCpphsOptions pstr contents
-  return $ Module fn $ if literateHaskellFilename (unSTP fn)
-    then CPP.unlit pstr noMacros
-    else noMacros
-
-unEither ∷ Either a a → a
-unEither (Left a) = a
-unEither (Right a) = a
+  let defaults = CPP.defaultCpphsOptions
+  let cppOpts = traceShowId $ defaults {
+    -- CPP.preInclude = ["/home/ben/preprocess-haskell/dist/build/autogen/cabal_macros.h"],
+    CPP.defines = macros ++ CPP.defines defaults,
+    CPP.boolopts = (CPP.boolopts defaults) {
+      CPP.literate = literateHaskellFilename(unSTP fn) }}
+  noMacros ← CPP.runCpphs cppOpts pstr contents
+  return $ Module fn noMacros
 
 moduleName ∷ [SrcTreePath] → SrcTreePath → Maybe ModuleName
 moduleName srcDirs fn = listToMaybe $ moduleNames
     where tryPrefix = flip P.stripPrefix $ unSTP fn
           pathToModule = P.splitDirectories
-                       ⋙ fmap (T.filter (≠'/') . unEither . P.toText)
+                       ⋙ fmap (T.filter (≠'/') . T.pack . P.encodeString)
                        ⋙ T.intercalate "."
                        ⋙ MN
           moduleNames = pathToModule . P.dropExtensions <$> pathNames
@@ -108,25 +108,31 @@ allSourceDirs desc = nub $ join $ libDirs ++ exeDirs
      libDirs = maybeToList (C.hsSourceDirs . C.libBuildInfo <$> C.library desc)
      exeDirs = C.hsSourceDirs . C.buildInfo <$> C.executables desc
 
-coerceIntoDirectory ∷ FilePath → FilePath
-coerceIntoDirectory fp =
-  if directory fp ≡ fp then fp else
-    P.decodeString(P.encodeString fp <> "/")
+macroPlaceholder ∷ IO [(String,String)]
+macroPlaceholder = do
+  let fn = "/home/ben/preprocess-haskell/dist/build/autogen/cabal_macros.h"
+  contents ← Prelude.readFile fn
+  snd <$> CPP.runCpphsReturningSymTab CPP.defaultCpphsOptions fn contents
 
-cabalSourceDirs ∷ SrcTreePath → IO [SrcTreePath]
-cabalSourceDirs cabalFile = do
+cabalMacros ∷ C.PackageDescription → IO [(String,String)]
+cabalMacros desc = traceShowId <$> macroPlaceholder
+
+cabalInfo ∷ SrcTreePath → IO ([SrcTreePath],[(String,String)])
+cabalInfo cabalFile = do
   -- traceM "cabalSourceDirs"
   gdesc ← C.readPackageDescription C.normal $ stpStr cabalFile
-  let pkgRoot = directory $ unSTP cabalFile
-      dirStrs = allSourceDirs $ C.flattenPackageDescription gdesc
-      toSTP d = STP $ P.collapse $ pkgRoot </> P.decodeString(d <> "/")
+  let desc        = C.flattenPackageDescription gdesc
+      pkgRoot     = directory $ unSTP cabalFile
+      dirStrs     = allSourceDirs desc
+      toSTP d     = STP $ P.collapse $ pkgRoot </> P.decodeString(d <> "/")
   -- traceM $ Prelude.show $ toSTP <$> dirStrs
-  return $ toSTP <$> dirStrs
+  macros ← cabalMacros desc
+  return (toSTP <$> dirStrs, macros)
 
 processPackage ∷ SrcTreePath → IO Package
 processPackage fn = do
   -- traceM $ P.encodeString $ unSTP fn
-  srcDirs ← cabalSourceDirs fn
+  (srcDirs,macros) ← cabalInfo fn
   -- traceM $ "srcDirs: " ++ Prelude.show srcDirs
   hsFiles ← fmap STP <$> shellLines (find haskellFiles ".")
   -- traceM $ "hsFiles: " ++ Prelude.show hsFiles
@@ -135,7 +141,7 @@ processPackage fn = do
     -- case nm of
       -- Nothing → return()
       -- Just n → traceM $ Prelude.show n ++ "(" ++ Prelude.show(unSTP hs) ++ ")"
-    src ← processFile hs
+    src ← processFile macros hs
     return $ (,src) <$> nm
 
 findPackages ∷ IO [SrcTreePath]
