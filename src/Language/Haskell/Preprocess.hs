@@ -39,12 +39,12 @@ newtype ModuleName = MN { unModuleName ∷ Text }
   deriving (Eq,Ord,IsString,Show)
 
 -- | Path's relative to the root of the source tree.
-newtype SourceTreePath = STP { unSTP ∷ P.FilePath }
+newtype SrcTreePath = STP { unSTP ∷ P.FilePath }
   deriving (Eq,Ord,IsString,Show)
 
 -- | The name and preprocessed contents of a source file.
 data Module = Module
-  { mFilename ∷ !SourceTreePath
+  { mFilename ∷ !SrcTreePath
   , mSource ∷ String
   }
   deriving (Show)
@@ -53,12 +53,12 @@ data Module = Module
 type Package = Map ModuleName Module
 
 -- | Map from a cabal file to it's associated source files.
-type SourceTree = Map SourceTreePath Package
+type SourceTree = Map SrcTreePath Package
 
 
 -- Values --------------------------------------------------------------------
 
-stpStr ∷ SourceTreePath → String
+stpStr ∷ SrcTreePath → String
 stpStr = P.encodeString . unSTP
 
 cabalFiles ∷ Pattern Text
@@ -76,7 +76,7 @@ shellLines = flip fold consFold
 literateHaskellFilename ∷ P.FilePath → Bool
 literateHaskellFilename fp = Just "lhs" ≡ P.extension fp
 
-processFile ∷ SourceTreePath → IO Module
+processFile ∷ SrcTreePath → IO Module
 processFile fn = do
   let pstr = P.encodeString (unSTP fn)
   contents ← Prelude.readFile pstr
@@ -90,16 +90,15 @@ unEither ∷ Either a a → a
 unEither (Left a) = a
 unEither (Right a) = a
 
-moduleName ∷ [SourceTreePath] → SourceTreePath → Maybe ModuleName
+moduleName ∷ [SrcTreePath] → SrcTreePath → Maybe ModuleName
 moduleName srcDirs fn = listToMaybe $ moduleNames
     where tryPrefix = flip P.stripPrefix $ unSTP fn
           pathToModule = P.splitDirectories
                        ⋙ fmap (T.filter (≠'/') . unEither . P.toText)
                        ⋙ T.intercalate "."
                        ⋙ MN
-          toRelDir d = P.decodeString $ "./" <> P.encodeString d <> "/"
           moduleNames = pathToModule . P.dropExtensions <$> pathNames
-          pathNames = catMaybes $ tryPrefix . toRelDir . unSTP <$> srcDirs
+          pathNames = catMaybes $ tryPrefix . unSTP <$> srcDirs
 
 -- TODO nub is not your friend.
 -- TODO Handle parse failures!
@@ -109,38 +108,46 @@ allSourceDirs desc = nub $ join $ libDirs ++ exeDirs
      libDirs = maybeToList (C.hsSourceDirs . C.libBuildInfo <$> C.library desc)
      exeDirs = C.hsSourceDirs . C.buildInfo <$> C.executables desc
 
-cabalSourceDirs ∷ SourceTreePath → IO [SourceTreePath]
-cabalSourceDirs cabalFile = do
-  traceM "cabalSourceDirs"
-  gdesc ← C.readPackageDescription C.normal $ stpStr cabalFile
-  let dirStrs = allSourceDirs $ C.flattenPackageDescription gdesc
-  traceM $ Prelude.show $ STP . P.decodeString <$> dirStrs
-  return $ STP . P.decodeString <$> dirStrs
+coerceIntoDirectory ∷ FilePath → FilePath
+coerceIntoDirectory fp =
+  if directory fp ≡ fp then fp else
+    P.decodeString(P.encodeString fp <> "/")
 
-processPackage ∷ SourceTreePath → IO Package
-processPackage fn@(STP p) = do
-  traceM "processPackage"
+cabalSourceDirs ∷ SrcTreePath → IO [SrcTreePath]
+cabalSourceDirs cabalFile = do
+  -- traceM "cabalSourceDirs"
+  gdesc ← C.readPackageDescription C.normal $ stpStr cabalFile
+  let pkgRoot = directory $ unSTP cabalFile
+      dirStrs = allSourceDirs $ C.flattenPackageDescription gdesc
+      toSTP d = STP $ P.collapse $ pkgRoot </> P.decodeString(d <> "/")
+  -- traceM $ Prelude.show $ toSTP <$> dirStrs
+  return $ toSTP <$> dirStrs
+
+processPackage ∷ SrcTreePath → IO Package
+processPackage fn = do
+  -- traceM $ P.encodeString $ unSTP fn
   srcDirs ← cabalSourceDirs fn
-  traceM $ "srcDirs: " ++ Prelude.show srcDirs
+  -- traceM $ "srcDirs: " ++ Prelude.show srcDirs
   hsFiles ← fmap STP <$> shellLines (find haskellFiles ".")
-  traceM $ "hsFiles: " ++ Prelude.show hsFiles
+  -- traceM $ "hsFiles: " ++ Prelude.show hsFiles
   fmap (M.fromList . catMaybes) $ forM hsFiles $ \hs → do
-    traceM $ "hs: " ++ Prelude.show hs
     let nm = moduleName srcDirs hs
-    traceM $ "nm: " ++ Prelude.show nm
+    -- case nm of
+      -- Nothing → return()
+      -- Just n → traceM $ Prelude.show n ++ "(" ++ Prelude.show(unSTP hs) ++ ")"
     src ← processFile hs
     return $ (,src) <$> nm
 
-findPackages ∷ IO [SourceTreePath]
+findPackages ∷ IO [SrcTreePath]
 findPackages = fmap STP <$> shellLines (find cabalFiles ".")
 
 processSourceTree ∷ FilePath → IO SourceTree
 processSourceTree fp = do
-  traceM $ "cd " ++ Prelude.show fp
+  -- traceM $ "cd " ++ Prelude.show fp
   cd fp
-  traceM $ "findPackages"
+  -- traceM $ "findPackages"
   packages ← findPackages
-  traceM $ "packages " ++ (Prelude.show packages)
+  -- traceM $ "packages " ++ (Prelude.show packages)
   fmap M.fromList $ forM packages $ \p → do
     result ← processPackage p
     return (p,result)
