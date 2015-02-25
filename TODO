@@ -1,0 +1,36 @@
+TODO Setup automated tests against the Warp web server.
+
+TODO Stop abusing lazy IO.
+	The approach of generating a large lazy data structure that contains
+	the entire repo is really not viable. I currently get
+	"too-many-open-files" errors when processing large repos.
+
+TODO Generate version-check macros.
+	Don't look at the installed database!
+		I want preprocessing to be a pure function:
+			(cabalFileText, SourceFileName, SourceFileText) → PreprocessedText
+
+		Generate package versions based entierly on the
+			constraints specified in the cabal file.
+
+		Relevant API functions:
+			generatePackageVersionMacros ∷ [PackageIdentifier] → String
+
+		Distribution.Package
+			data PackageIdentifier {pkgName∷PackageName, pkgVersion∷Version}
+			data PackageName {unPackageName∷String}
+			data Version {versionBranch∷[Int], versionTags∷[String]}
+
+		Language.Preprocessor.Cpphs
+			runCpphsReturningSymTab
+				∷ CpphsOptions -> FilePath -> String -> IO (String, [(String, String)])
+
+		Language.Preprocessor.Cpphs.Options
+			data CpphsOptions = CpphsOptions
+				{ infiles    ∷ [FilePath]
+				, outfiles   ∷ [FilePath]
+				, defines    ∷ [(String,String)]
+				, includes   ∷ [String]
+				, preInclude ∷ [FilePath]   -- ^ Files to \#include before anything else
+				, boolopts   ∷ BoolOptions
+				}
