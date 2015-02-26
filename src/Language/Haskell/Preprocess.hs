@@ -30,9 +30,12 @@ import qualified System.IO.Temp as IO
 import qualified System.IO as IO
 import Control.DeepSeq
 
+import qualified Distribution.Package as C
+import qualified Distribution.Simple.Build.Macros as C
 import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parse as C
 import qualified Distribution.Verbosity as C
+import qualified Distribution.Version as C
 import qualified Distribution.PackageDescription.Configuration as C
 
 import Debug.Trace
@@ -136,19 +139,41 @@ macroPlaceholder = do
   -- contents ← Prelude.readFile fn
   -- snd <$> CPP.runCpphsReturningSymTab CPP.defaultCpphsOptions fn contents
 
-cabalMacros ∷ C.PackageDescription → IO String
-cabalMacros desc = macroPlaceholder
+-- chooseVersion chooses the greatest version that is explicitly mentioned.
+chooseVersion ∷ C.VersionRange → C.Version
+chooseVersion = C.foldVersionRange fallback id id id max max
+  where fallback = C.Version [0,1,0,0] []
+
+pkgDeps ∷ C.GenericPackageDescription → [C.Dependency]
+pkgDeps gdesc = C.buildDepends desc
+  where desc = allDeps gdesc
+        allDeps = C.flattenPackageDescription
+        justLibs gpd = C.flattenPackageDescription $ gpd
+          { C.condTestSuites = []
+          , C.condBenchmarks = []
+          }
+
+cabalMacros ∷ C.GenericPackageDescription → String
+cabalMacros = C.generatePackageVersionMacros . pkgs
+  where resolve (C.Dependency n v) = C.PackageIdentifier n $ chooseVersion v
+        pkgs = fmap resolve . pkgDeps
 
 cabalInfo ∷ SrcTreePath → IO ([SrcTreePath],String)
 cabalInfo cabalFile = do
-  -- traceM "cabalSourceDirs"
+  traceM $ "cabalInfo " <> stpStr cabalFile
   gdesc ← C.readPackageDescription C.normal $ stpStr cabalFile
   let desc        = C.flattenPackageDescription gdesc
       pkgRoot     = directory $ unSTP cabalFile
       dirStrs     = allSourceDirs desc
       toSTP d     = STP $ P.collapse $ pkgRoot </> P.decodeString(d <> "/")
+
   -- traceM $ Prelude.show $ toSTP <$> dirStrs
-  macros ← cabalMacros desc
+  let macros = cabalMacros gdesc
+
+  -- traceM $ "<macros pkg=" ++ stpStr cabalFile ++ ">"
+  -- traceM $ macros
+  -- traceM $ "</macros>"
+
   return (toSTP <$> dirStrs, macros)
 
 processPackage ∷ SrcTreePath → IO Package
@@ -159,12 +184,9 @@ processPackage fn = do
   hsFiles ← fmap STP <$> shellLines (find haskellFiles ".")
   -- traceM $ "hsFiles: " ++ Prelude.show hsFiles
   fmap (M.fromList . catMaybes) $ forM hsFiles $ \hs → do
-    let nm = moduleName srcDirs hs
-    -- case nm of
-      -- Nothing → return()
-      -- Just n → traceM $ Prelude.show n ++ "(" ++ Prelude.show(unSTP hs) ++ ")"
-    src ← processFile macros hs
-    return $ (,src) <$> nm
+    case moduleName srcDirs hs of
+      Nothing → return Nothing
+      Just nm → Just . (nm,) <$> processFile macros hs
 
 findPackages ∷ IO [SrcTreePath]
 findPackages = fmap STP <$> shellLines (find cabalFiles ".")
