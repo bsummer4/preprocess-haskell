@@ -16,5 +16,6 @@ library
   hs-source-dirs:      src
   default-language:    Haskell2010
   build-depends:       base >=4.7 && <4.8, foldl, system-filepath, turtle,
-                       basic-prelude, cpphs, containers, base-unicode-symbols,
-                       text, Cabal
+                       basic-prelude, cpphs==1.18.9, containers,
+                       base-unicode-symbols, text, Cabal, temporary>=1.1, unix,
+                       deepseq, file-embed, bytestring

@@ -25,12 +25,22 @@ import Data.Maybe
 import qualified Language.Preprocessor.Unlit as CPP
 import qualified Language.Preprocessor.Cpphs as CPP
 
+import System.Posix.Process
+import qualified System.IO.Temp as IO
+import qualified System.IO as IO
+import Control.DeepSeq
+
+import qualified Distribution.Package as C
+import qualified Distribution.Simple.Build.Macros as C
 import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parse as C
 import qualified Distribution.Verbosity as C
+import qualified Distribution.Version as C
 import qualified Distribution.PackageDescription.Configuration as C
 
 import Debug.Trace
+
+import Language.Haskell.Preprocess.Macros
 
 
 -- Types ---------------------------------------------------------------------
@@ -76,25 +86,49 @@ shellLines = flip fold consFold
 literateHaskellFilename ∷ P.FilePath → Bool
 literateHaskellFilename fp = Just "lhs" ≡ P.extension fp
 
-processFile ∷ SrcTreePath → IO Module
-processFile fn = do
+yuck ∷ String → String
+yuck = T.pack
+     ⋙ T.replace "defined(MIN_VERSION_hashable)" "1"
+     ⋙ T.replace "defined(MIN_VERSION_integer_gmp)" "1"
+     ⋙ T.unpack
+
+processFile ∷ String → SrcTreePath → IO Module
+processFile macros fn = do
+  IO.withSystemTempFile "cabal_macros.h" $ \fp handle → do
+    IO.hPutStrLn handle macros
+    IO.hPutStrLn handle ghcMacros
+    IO.hClose handle
+
+    let pstr = P.encodeString (unSTP fn)
+    contents' ← Prelude.readFile pstr
+    let contents = yuck contents'
+    let defaults = CPP.defaultCpphsOptions
+        cppOpts = defaults {
+          CPP.preInclude = [fp],
+          CPP.boolopts = (CPP.boolopts defaults) {
+            CPP.warnings = False,
+            CPP.literate = literateHaskellFilename(unSTP fn) }}
+    noMacros ← CPP.runCpphs cppOpts pstr contents
+    noMacros `deepseq` return(Module fn noMacros)
+
+-- TODO Why doesn't this work?
+processFileSane ∷ [(String,String)] → SrcTreePath → IO Module
+processFileSane macros fn = do
   let pstr = P.encodeString (unSTP fn)
   contents ← Prelude.readFile pstr
-  return $ Module fn contents
-  noMacros ← CPP.runCpphs CPP.defaultCpphsOptions pstr contents
-  return $ Module fn $ if literateHaskellFilename (unSTP fn)
-    then CPP.unlit pstr noMacros
-    else noMacros
-
-unEither ∷ Either a a → a
-unEither (Left a) = a
-unEither (Right a) = a
+  let defaults = CPP.defaultCpphsOptions
+  let cppOpts = defaults {
+    CPP.defines = macros ++ CPP.defines defaults,
+    CPP.boolopts = (CPP.boolopts defaults) {
+      CPP.literate = literateHaskellFilename(unSTP fn) }}
+  noMacros ← CPP.runCpphs cppOpts pstr contents
+  return $ Module fn noMacros
 
 moduleName ∷ [SrcTreePath] → SrcTreePath → Maybe ModuleName
 moduleName srcDirs fn = listToMaybe $ moduleNames
     where tryPrefix = flip P.stripPrefix $ unSTP fn
           pathToModule = P.splitDirectories
-                       ⋙ fmap (T.filter (≠'/') . unEither . P.toText)
+                       ⋙ fmap (T.filter (≠'/') . T.pack . P.encodeString)
                        ⋙ T.intercalate "."
                        ⋙ MN
           moduleNames = pathToModule . P.dropExtensions <$> pathNames
@@ -108,35 +142,62 @@ allSourceDirs desc = nub $ join $ libDirs ++ exeDirs
      libDirs = maybeToList (C.hsSourceDirs . C.libBuildInfo <$> C.library desc)
      exeDirs = C.hsSourceDirs . C.buildInfo <$> C.executables desc
 
-coerceIntoDirectory ∷ FilePath → FilePath
-coerceIntoDirectory fp =
-  if directory fp ≡ fp then fp else
-    P.decodeString(P.encodeString fp <> "/")
+macroPlaceholder ∷ IO String
+macroPlaceholder = do
+  f ← Prelude.readFile "/home/ben/preprocess-haskell/dist/build/autogen/cabal_macros.h"
+  f `deepseq` return f
 
-cabalSourceDirs ∷ SrcTreePath → IO [SrcTreePath]
-cabalSourceDirs cabalFile = do
-  -- traceM "cabalSourceDirs"
+  -- contents ← Prelude.readFile fn
+  -- snd <$> CPP.runCpphsReturningSymTab CPP.defaultCpphsOptions fn contents
+
+-- chooseVersion chooses the greatest version that is explicitly mentioned.
+chooseVersion ∷ C.VersionRange → C.Version
+chooseVersion = C.foldVersionRange fallback id id id max max
+  where fallback = C.Version [0,1,0,0] []
+
+pkgDeps ∷ C.GenericPackageDescription → [C.Dependency]
+pkgDeps gdesc = C.buildDepends desc
+  where desc = allDeps gdesc
+        allDeps = C.flattenPackageDescription
+        justLibs gpd = C.flattenPackageDescription $ gpd
+          { C.condTestSuites = []
+          , C.condBenchmarks = []
+          }
+
+cabalMacros ∷ C.GenericPackageDescription → String
+cabalMacros = C.generatePackageVersionMacros . pkgs
+  where resolve (C.Dependency n v) = C.PackageIdentifier n $ chooseVersion v
+        pkgs = fmap resolve . pkgDeps
+
+cabalInfo ∷ SrcTreePath → IO ([SrcTreePath],String)
+cabalInfo cabalFile = do
+  traceM $ "cabalInfo " <> stpStr cabalFile
   gdesc ← C.readPackageDescription C.normal $ stpStr cabalFile
-  let pkgRoot = directory $ unSTP cabalFile
-      dirStrs = allSourceDirs $ C.flattenPackageDescription gdesc
-      toSTP d = STP $ P.collapse $ pkgRoot </> P.decodeString(d <> "/")
+  let desc        = C.flattenPackageDescription gdesc
+      pkgRoot     = directory $ unSTP cabalFile
+      dirStrs     = allSourceDirs desc
+      toSTP d     = STP $ P.collapse $ pkgRoot </> P.decodeString(d <> "/")
+
   -- traceM $ Prelude.show $ toSTP <$> dirStrs
-  return $ toSTP <$> dirStrs
+  let macros = cabalMacros gdesc
+
+  -- traceM $ "<macros pkg=" ++ stpStr cabalFile ++ ">"
+  -- traceM $ macros
+  -- traceM $ "</macros>"
+
+  return (toSTP <$> dirStrs, macros)
 
 processPackage ∷ SrcTreePath → IO Package
 processPackage fn = do
   -- traceM $ P.encodeString $ unSTP fn
-  srcDirs ← cabalSourceDirs fn
+  (srcDirs,macros) ← cabalInfo fn
   -- traceM $ "srcDirs: " ++ Prelude.show srcDirs
   hsFiles ← fmap STP <$> shellLines (find haskellFiles ".")
   -- traceM $ "hsFiles: " ++ Prelude.show hsFiles
   fmap (M.fromList . catMaybes) $ forM hsFiles $ \hs → do
-    let nm = moduleName srcDirs hs
-    -- case nm of
-      -- Nothing → return()
-      -- Just n → traceM $ Prelude.show n ++ "(" ++ Prelude.show(unSTP hs) ++ ")"
-    src ← processFile hs
-    return $ (,src) <$> nm
+    case moduleName srcDirs hs of
+      Nothing → return Nothing
+      Just nm → Just . (nm,) <$> processFile macros hs
 
 findPackages ∷ IO [SrcTreePath]
 findPackages = fmap STP <$> shellLines (find cabalFiles ".")

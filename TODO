@@ -1,10 +1,5 @@
 TODO Setup automated tests against the Warp web server.
 
-TODO Stop abusing lazy IO.
-	The approach of generating a large lazy data structure that contains
-	the entire repo is really not viable. I currently get
-	"too-many-open-files" errors when processing large repos.
-
 TODO Generate version-check macros.
 	Don't look at the installed database!
 		I want preprocessing to be a pure function:
