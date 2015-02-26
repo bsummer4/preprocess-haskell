@@ -40,6 +40,8 @@ import qualified Distribution.PackageDescription.Configuration as C
 
 import Debug.Trace
 
+import Language.Haskell.Preprocess.Macros
+
 
 -- Types ---------------------------------------------------------------------
 
@@ -84,18 +86,27 @@ shellLines = flip fold consFold
 literateHaskellFilename ∷ P.FilePath → Bool
 literateHaskellFilename fp = Just "lhs" ≡ P.extension fp
 
+yuck ∷ String → String
+yuck = T.pack
+     ⋙ T.replace "defined(MIN_VERSION_hashable)" "1"
+     ⋙ T.replace "defined(MIN_VERSION_integer_gmp)" "1"
+     ⋙ T.unpack
+
 processFile ∷ String → SrcTreePath → IO Module
 processFile macros fn = do
   IO.withSystemTempFile "cabal_macros.h" $ \fp handle → do
-    IO.hPutStr handle macros
-    IO.hPutStr handle "#define __GLASGOW_HASKELL__ 708"
+    IO.hPutStrLn handle macros
+    IO.hPutStrLn handle ghcMacros
     IO.hClose handle
+
     let pstr = P.encodeString (unSTP fn)
-    contents ← Prelude.readFile pstr
+    contents' ← Prelude.readFile pstr
+    let contents = yuck contents'
     let defaults = CPP.defaultCpphsOptions
         cppOpts = defaults {
           CPP.preInclude = [fp],
           CPP.boolopts = (CPP.boolopts defaults) {
+            CPP.warnings = False,
             CPP.literate = literateHaskellFilename(unSTP fn) }}
     noMacros ← CPP.runCpphs cppOpts pstr contents
     noMacros `deepseq` return(Module fn noMacros)
