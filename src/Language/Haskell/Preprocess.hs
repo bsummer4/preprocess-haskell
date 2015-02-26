@@ -25,6 +25,11 @@ import Data.Maybe
 import qualified Language.Preprocessor.Unlit as CPP
 import qualified Language.Preprocessor.Cpphs as CPP
 
+import System.Posix.Process
+import qualified System.IO.Temp as IO
+import qualified System.IO as IO
+import Control.DeepSeq
+
 import qualified Distribution.PackageDescription as C
 import qualified Distribution.PackageDescription.Parse as C
 import qualified Distribution.Verbosity as C
@@ -76,14 +81,29 @@ shellLines = flip fold consFold
 literateHaskellFilename ∷ P.FilePath → Bool
 literateHaskellFilename fp = Just "lhs" ≡ P.extension fp
 
-processFile ∷ [(String,String)] → SrcTreePath → IO Module
+processFile ∷ String → SrcTreePath → IO Module
 processFile macros fn = do
+  IO.withSystemTempFile "cabal_macros.h" $ \fp handle → do
+    IO.hPutStr handle macros
+    IO.hPutStr handle "#define __GLASGOW_HASKELL__ 708"
+    IO.hClose handle
+    let pstr = P.encodeString (unSTP fn)
+    contents ← Prelude.readFile pstr
+    let defaults = CPP.defaultCpphsOptions
+        cppOpts = defaults {
+          CPP.preInclude = [fp],
+          CPP.boolopts = (CPP.boolopts defaults) {
+            CPP.literate = literateHaskellFilename(unSTP fn) }}
+    noMacros ← CPP.runCpphs cppOpts pstr contents
+    noMacros `deepseq` return(Module fn noMacros)
+
+-- TODO Why doesn't this work?
+processFileSane ∷ [(String,String)] → SrcTreePath → IO Module
+processFileSane macros fn = do
   let pstr = P.encodeString (unSTP fn)
   contents ← Prelude.readFile pstr
-  return $ Module fn contents
   let defaults = CPP.defaultCpphsOptions
-  let cppOpts = traceShowId $ defaults {
-    -- CPP.preInclude = ["/home/ben/preprocess-haskell/dist/build/autogen/cabal_macros.h"],
+  let cppOpts = defaults {
     CPP.defines = macros ++ CPP.defines defaults,
     CPP.boolopts = (CPP.boolopts defaults) {
       CPP.literate = literateHaskellFilename(unSTP fn) }}
@@ -108,16 +128,18 @@ allSourceDirs desc = nub $ join $ libDirs ++ exeDirs
      libDirs = maybeToList (C.hsSourceDirs . C.libBuildInfo <$> C.library desc)
      exeDirs = C.hsSourceDirs . C.buildInfo <$> C.executables desc
 
-macroPlaceholder ∷ IO [(String,String)]
+macroPlaceholder ∷ IO String
 macroPlaceholder = do
-  let fn = "/home/ben/preprocess-haskell/dist/build/autogen/cabal_macros.h"
-  contents ← Prelude.readFile fn
-  snd <$> CPP.runCpphsReturningSymTab CPP.defaultCpphsOptions fn contents
+  f ← Prelude.readFile "/home/ben/preprocess-haskell/dist/build/autogen/cabal_macros.h"
+  f `deepseq` return f
 
-cabalMacros ∷ C.PackageDescription → IO [(String,String)]
-cabalMacros desc = traceShowId <$> macroPlaceholder
+  -- contents ← Prelude.readFile fn
+  -- snd <$> CPP.runCpphsReturningSymTab CPP.defaultCpphsOptions fn contents
 
-cabalInfo ∷ SrcTreePath → IO ([SrcTreePath],[(String,String)])
+cabalMacros ∷ C.PackageDescription → IO String
+cabalMacros desc = macroPlaceholder
+
+cabalInfo ∷ SrcTreePath → IO ([SrcTreePath],String)
 cabalInfo cabalFile = do
   -- traceM "cabalSourceDirs"
   gdesc ← C.readPackageDescription C.normal $ stpStr cabalFile

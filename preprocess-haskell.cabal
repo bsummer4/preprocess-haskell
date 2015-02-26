@@ -17,4 +17,4 @@ library
   default-language:    Haskell2010
   build-depends:       base >=4.7 && <4.8, foldl, system-filepath, turtle,
                        basic-prelude, cpphs, containers, base-unicode-symbols,
-                       text, Cabal
+                       text, Cabal, temporary>=1.1, unix, deepseq
