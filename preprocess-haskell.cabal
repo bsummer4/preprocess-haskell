@@ -1,7 +1,7 @@
 name:                preprocess-haskell
 version:             0.0.1.0
 synopsis:            Preprocess Haskell Repositories.
-license:             MIT
+license:             BSD3
 license-file:        LICENSE
 author:              Benjamin Summers
 maintainer:          ben@benjaminsummers.net
