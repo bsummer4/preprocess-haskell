@@ -1,20 +1,20 @@
-{-# LANGUAGE TemplateHaskell, UnicodeSyntax, QuasiQuotes #-}
+{-# LANGUAGE QuasiQuotes, TemplateHaskell #-}
 
 module Language.Haskell.Preprocess.Macros(compilerMacros,stdHdrs) where
 
-import Data.Monoid
+import Prelude
 
-import Data.String.Here
 import Data.FileEmbed
+import Data.String.Here
 
-import qualified Data.Map as M
-import qualified Filesystem.Path as P
+import           Control.Arrow
+import qualified Data.ByteString           as BS
+import qualified Data.Map                  as M
+import qualified Filesystem.Path           as P
 import qualified Filesystem.Path.CurrentOS as P
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as BS8
 
 stdHdrs ∷ M.Map P.FilePath BS.ByteString
-stdHdrs = M.fromList $ map (\(k,v)→(P.decodeString k,v)) $(embedDir "include")
+stdHdrs = M.fromList $ map (first P.decodeString) $(embedDir "include")
 
 compilerMacros ∷ String
 compilerMacros = x++"\n" where x = [here|
