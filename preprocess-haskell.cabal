@@ -36,3 +36,5 @@ library
   exposed-modules:     Language.Haskell.Preprocess
                      , Language.Haskell.Preprocess.Internal
                      , Language.Haskell.Preprocess.Examples
+
+  other-modules:       Language.Haskell.Preprocess.Macros
